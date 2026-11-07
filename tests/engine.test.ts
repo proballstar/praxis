@@ -1,103 +1,187 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  fixture,
-  delayed,
-  baseline,
-  optimizeKitchen,
+  HOLD_BUFFER,
+  Job,
+  MIN_GAIN,
+  Slot,
   metrics,
+  plan,
   schedule,
-  validateKitchen,
-  Kitchen,
-} from "../lib/kitchen";
-function feasible(k: Kitchen, slots = optimizeKitchen(k).slots) {
-  assert.equal(slots.length, 3);
-  assert.equal(new Set(slots.map((s) => s.id)).size, 3);
+} from "../lib/engine";
+
+/** The eight-minute-delay fixture from the original demo, at "now" = 0. */
+const delayed = (): Job[] => [
+  { id: "1042", remaining: 14, arrival: 6, deadline: 8, station: 1 },
+  { id: "1043", remaining: 12, arrival: 22, deadline: 24 },
+  { id: "1044", remaining: 4, arrival: 14, deadline: 16 },
+];
+
+function assertFeasible(jobs: Job[], slots: Slot[], stations: number) {
+  assert.equal(slots.length, jobs.length);
+  assert.equal(new Set(slots.map((s) => s.id)).size, jobs.length);
   for (const a of slots) {
-    assert.ok(a.start >= k.now);
-    assert.ok(a.end >= a.start);
-    assert.ok(a.lane < k.capacity);
-    for (const b of slots.filter((b) => b !== a && b.lane === a.lane))
-      assert.ok(a.end <= b.start || b.end <= a.start);
+    const job = jobs.find((j) => j.id === a.id)!;
+    assert.ok(a.start >= 0);
+    assert.equal(a.end - a.start, job.remaining);
+    assert.ok(a.lane < stations);
+    if (job.station !== undefined) {
+      assert.equal(a.start, 0);
+      assert.equal(a.lane, job.station - 1);
+    }
+    for (const b of slots)
+      if (b !== a && b.lane === a.lane)
+        assert.ok(a.end <= b.start || b.end <= a.start, `${a.id}/${b.id}`);
   }
-  return slots;
 }
-test("same fixture, same delay, reproducible plans", () => {
-  const k = fixture();
-  const d = delayed(k);
-  assert.equal(k.delay, 0);
-  assert.equal(d.delay, 8);
-  assert.deepEqual(optimizeKitchen(d), optimizeKitchen(delayed(fixture())));
-  assert.deepEqual(delayed(d), d);
+
+test("keeps the known delay result: FCFS 28/22, recommended 20/14", () => {
+  const p = plan(delayed(), ["1043", "1044"], { stations: 1 });
+  assert.equal(p.current.metrics.wait, 28);
+  assert.equal(p.current.metrics.lateness, 22);
+  assert.deepEqual(p.best.sequence, ["1044", "1043"]);
+  assert.equal(p.best.metrics.wait, 20);
+  assert.equal(p.best.metrics.lateness, 14);
+  assert.equal(p.method, "exact");
+  assert.equal(p.examined, 3);
+  assert.equal(p.shouldChange, true);
 });
-test("sad path preserves FCFS and exposes pickup conflicts", () => {
-  const k = delayed(fixture());
-  const slots = feasible(k, baseline(k));
-  assert.deepEqual(
-    slots.map((s) => s.id),
-    ["DD-1042", "DD-1043", "DD-1044"],
+
+test("exact search matches brute force on every ordering", () => {
+  const jobs: Job[] = [
+    { id: "a", remaining: 9, arrival: 5, deadline: 8 },
+    { id: "b", remaining: 3, arrival: 4, deadline: 6 },
+    { id: "c", remaining: 7, arrival: 20, deadline: 25 },
+    { id: "d", remaining: 5, arrival: 9, deadline: 12 },
+  ];
+  const all: string[][] = [];
+  const walk = (p: string[], r: string[]) =>
+    r.length
+      ? r.forEach((x) => walk([...p, x], r.filter((y) => y !== x)))
+      : all.push(p);
+  walk([], ["a", "b", "c", "d"]);
+  const options = { stations: 2 };
+  const lowest = Math.min(
+    ...all.map((s) => metrics(schedule(jobs, s, options)).score),
   );
-  assert.deepEqual(
-    slots.map((s) => s.end),
-    [18, 30, 34],
-  );
-  assert.equal(metrics(slots).wait, 28);
-  assert.equal(metrics(slots).lateness, 22);
+  const p = plan(jobs, ["a", "b", "c", "d"], options);
+  assert.equal(p.best.metrics.score, lowest);
+  assert.equal(p.examined, 25);
 });
-test("happy path is optimal among both pending sequences", () => {
-  const k = delayed(fixture());
-  const r = optimizeKitchen(k);
-  feasible(k, r.slots);
-  assert.equal(r.examined, 2);
-  assert.deepEqual(
-    r.slots.map((s) => s.id),
-    ["DD-1042", "DD-1044", "DD-1043"],
-  );
-  assert.deepEqual(
-    r.slots.map((s) => s.end),
-    [18, 22, 34],
-  );
-  assert.equal(r.metrics.wait, 20);
-  assert.equal(r.metrics.lateness, 14);
-  for (const ids of [
-    ["DD-1043", "DD-1044"],
-    ["DD-1044", "DD-1043"],
-  ])
-    assert.ok(r.metrics.score <= metrics(schedule(k, ids)).score);
+
+test("never reshuffles for a tie or a trivial gain", () => {
+  const jobs: Job[] = [
+    { id: "a", remaining: 5, arrival: 5, deadline: 8 },
+    { id: "b", remaining: 5, arrival: 5, deadline: 8 },
+  ];
+  const p = plan(jobs, ["b", "a"], { stations: 2 });
+  assert.deepEqual(p.best.sequence, ["b", "a"]);
+  assert.equal(p.shouldChange, false);
+  assert.ok(MIN_GAIN > 0);
 });
-test("in-progress preparation never moves or restarts", () => {
-  const k = delayed(fixture());
-  const active = optimizeKitchen(k).slots[0];
-  assert.equal(active.id, "DD-1042");
-  assert.equal(active.start, 4);
-  assert.equal(active.remaining, 14);
-  assert.equal(active.end, 18);
-  assert.equal(k.orders[0].worked, 4);
+
+test("holds an order with a distant courier instead of cooking it early", () => {
+  const jobs: Job[] = [{ id: "later", remaining: 10, arrival: 40, deadline: 45 }];
+  const [slot] = schedule(jobs, ["later"], { stations: 1 });
+  assert.equal(slot.start, 30 - HOLD_BUFFER);
+  assert.equal(slot.held, true);
+  assert.equal(slot.foodIdle, HOLD_BUFFER);
 });
-test("capacity honored with one, two and three stations", () => {
-  for (const capacity of [1, 2, 3]) {
-    const k = { ...delayed(fixture()), capacity };
-    feasible(k);
-    assert.ok(optimizeKitchen(k).metrics.score <= metrics(baseline(k)).score);
+
+test("a held order does not block a station for orders that can start", () => {
+  const jobs: Job[] = [
+    { id: "later", remaining: 10, arrival: 40, deadline: 45 },
+    { id: "now", remaining: 5, arrival: 5, deadline: 8 },
+  ];
+  const p = plan(jobs, ["later", "now"], { stations: 1 });
+  assert.equal(p.best.sequence[0], "now");
+  assert.equal(p.best.metrics.late, 0);
+  assert.equal(p.best.metrics.wait, 0);
+});
+
+test("a courier already here is never held", () => {
+  const [slot] = schedule(
+    [{ id: "x", remaining: 4, arrival: -3, deadline: 2 }],
+    ["x"],
+    { stations: 1 },
+  );
+  assert.equal(slot.start, 0);
+  assert.equal(slot.held, false);
+});
+
+test("cooking orders stay on their station; capacity and overlap hold", () => {
+  for (const stations of [1, 2, 3, 6]) {
+    const p = plan(delayed(), ["1043", "1044"], { stations });
+    assertFeasible(delayed(), p.best.slots, stations);
+    assert.ok(p.best.metrics.score <= p.current.metrics.score);
   }
+  const jobs = [
+    { id: "a", remaining: 4, arrival: 9, deadline: 9, station: 2 },
+    { id: "b", remaining: 4, arrival: 2, deadline: 2 },
+  ];
+  assert.equal(schedule(jobs, ["b"], { stations: 2 })[1].lane, 0);
 });
-test("initial schedule, reset fixture and idle metrics are real", () => {
-  const k = fixture();
-  assert.equal(baseline(k)[0].end, 10);
-  assert.deepEqual(fixture(), k);
-  const r = optimizeKitchen(k);
-  assert.equal(
-    r.slots.reduce((n, s) => n + s.foodIdle, 0),
-    r.metrics.idle,
+
+test("a dinner-rush queue of 40 stays feasible, fast and deterministic", () => {
+  const jobs: Job[] = Array.from({ length: 40 }, (_, i) => {
+    const arrival = (i * 37) % 90;
+    return {
+      id: `o${String(i).padStart(2, "0")}`,
+      remaining: 3 + ((i * 13) % 14),
+      arrival,
+      deadline: arrival + 5,
+    };
+  });
+  const sequence = jobs.map((j) => j.id);
+  const started = performance.now();
+  const p = plan(jobs, sequence, { stations: 4 });
+  assert.ok(performance.now() - started < 1500);
+  assert.equal(p.method, "heuristic");
+  assertFeasible(jobs, p.best.slots, 4);
+  assert.ok(p.best.metrics.score < p.current.metrics.score);
+  assert.deepEqual(p, plan(jobs, sequence, { stations: 4 }));
+});
+
+test("the heuristic lands close to exact on a queue exact can still solve", () => {
+  const jobs: Job[] = Array.from({ length: 8 }, (_, i) => {
+    const arrival = 4 + ((i * 11) % 30);
+    return {
+      id: `o${i}`,
+      remaining: 3 + ((i * 7) % 9),
+      arrival,
+      deadline: arrival + 4,
+    };
+  });
+  const ids = jobs.map((j) => j.id);
+  const options = { stations: 2 };
+  const score = (s: string[]) => metrics(schedule(jobs, s, options)).score;
+  let lowest = Infinity;
+  const walk = (p: string[], r: string[]) => {
+    if (!r.length) lowest = Math.min(lowest, score(p));
+    else r.forEach((x) => walk([...p, x], r.filter((y) => y !== x)));
+  };
+  walk([], ids);
+  const found = plan(jobs, ids, options);
+  assert.equal(found.method, "heuristic");
+  assert.ok(
+    found.best.metrics.score <= lowest * 1.1,
+    `${found.best.metrics.score} vs optimal ${lowest}`,
   );
 });
-test("invalid capacity, duplicate sequence and malformed state reject", () => {
-  assert.throws(() => baseline({ ...fixture(), capacity: 0 }));
-  assert.throws(() => schedule(fixture(), ["DD-1043", "DD-1043"]));
-  assert.throws(() => schedule(fixture(), ["DD-1043", "DD-1044", "DD-1044"]));
-  const k = fixture();
-  k.orders[0].worked = 100;
-  assert.equal(validateKitchen(k), false);
-  assert.throws(() => baseline(k));
-  assert.equal(validateKitchen({ orders: [] }), false);
+
+test("rejects malformed sequences and impossible station use", () => {
+  const options = { stations: 1 };
+  assert.throws(() => schedule(delayed(), ["1043", "1043"], options));
+  assert.throws(() => schedule(delayed(), ["1043"], options));
+  assert.throws(() => schedule(delayed(), ["1043", "1044"], { stations: 0 }));
+  assert.throws(() =>
+    schedule(
+      [
+        { id: "a", remaining: 1, arrival: 1, deadline: 1, station: 1 },
+        { id: "b", remaining: 1, arrival: 1, deadline: 1, station: 1 },
+      ],
+      [],
+      { stations: 2 },
+    ),
+  );
 });

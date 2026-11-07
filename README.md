@@ -1,74 +1,81 @@
-# Praxis — kitchen coordination
+# Praxis
 
-Independent restaurant operations prototype for DoorDash merchants. Three sample orders, one unexpected eight-minute preparation delay, and two comparable outcomes. No live DoorDash integration or merchant credentials required.
+A live kitchen board for restaurants handling delivery orders. Enter orders as they arrive, tap as they move through the kitchen, and Praxis tells you what to cook next so food and couriers meet on time. When something slips, it recalculates and recommends a better order, and nothing changes until you approve it.
 
-## Run
+## Run it
 
 ```sh
 npm install
-npm run dev
+npm run build
+npm start
 ```
 
-Open **http://localhost:3100**. Both development and production bind to `0.0.0.0`, so a phone on the same Wi-Fi can open `http://<your-computer-LAN-IP>:3100`. Each browser keeps its own local state.
+Open **http://localhost:3100** and set up your kitchen: name, cooking stations, and menu with prep times. There is nothing else to configure, and no account or API key.
+
+Every device on the same Wi-Fi can open `http://<this-computer's-IP>:3100` and share the same live board, for example a tablet on the line and a phone at the pass. Keep the computer awake during service. Boards update within a few seconds.
+
+## During a shift
+
+1. **New order:** tap the items, confirm the prep time, and pick when the courier arrives.
+2. **Start** an order when a station is free. Orders not worth cooking yet show when to start them, so food isn't ready long before the courier.
+3. **Ready**, then **Picked up**, as each order moves along.
+4. **Problem or change** on any order: it's taking longer, the courier's time changed, the courier is here, move it, or cancel it.
+5. If a better cooking order appears, a banner names the change and what it saves. **Review change** shows both versions side by side. **Keep my order** dismisses it.
+6. **Undo** (top bar) reverses mistaken taps. **Shift report** shows actual results from the taps recorded. Prep estimates that keep running over are worth raising in Settings.
+
+To try it without real orders, use **Try it with sample orders** on an empty board. Sample orders are labeled, can be cleared, and never count in reports.
+
+## How planning works
+
+Each station cooks one order at a time. Orders already cooking are never moved or interrupted, and the queue is only reordered with approval.
+
+- **Objective:** minimize `5 × minutes past the pickup window + 2 × minutes a courier waits + minutes food sits`.
+- **Search:** with up to 7 queued orders, every possible order is checked. Longer queues use a deterministic heuristic (earliest-deadline insertion, then adjacent swaps), which finds a strong order rather than a proven best one. The review screen says which was used.
+- **Hold times:** an order is held until 2 minutes before it needs to start to meet its courier, so short estimate overruns don't cause lateness.
+- **Recommendations:** shown only when the gain is worth interrupting the line (a score drop of at least 6, with less total waiting or lateness). Ties keep your current order.
+- **Prep estimates:** the longest dish on the ticket, plus 1 minute per additional dish. This is a rough rule, so the estimate can be changed on any order.
+
+The planner's numbers are computed, never generated. On the reference case (one station, an in-progress order delayed by 8 minutes), moving a short order ahead of a long one takes courier waiting from 28 to 20 minutes and lateness from 22 to 14. The remaining lateness can't be recovered, and the app says so.
+
+## Current limits
+
+- **Orders are entered by hand.** There is no live connection to DoorDash or any other platform, because that requires partner API access. Courier times come from what staff see on the merchant tablet, and don't update themselves.
+- **One kitchen, one computer.** Data is one file at `data/service.json` (set `PRAXIS_DATA_FILE` to move it). Back it up if your history matters. Hosting that lacks a persistent disk, such as Vercel, won't keep it.
+- **No login.** Anyone on the same network can open the board and change it, and customer names are stored unencrypted. Use it only on a network you trust. Don't expose port 3100 to the internet.
+- **Stations are interchangeable.** The model doesn't know about grill versus fryer, batching, or tasks that overlap on one ticket.
+
+## AI assistant (optional)
+
+**Ask Praxis** works without AI by giving a summary of the live plan. To let it understand questions and requests, add a key and restart:
 
 ```sh
-npm test                 # deterministic engine scenarios
-npm run build            # production compilation and TypeScript
-npm start                # serves production build on port 3100
-npx playwright install chromium
-npm run test:ui          # requires app running on port 3100
+cp .env.example .env.local   # then set OPENROUTER_API_KEY
 ```
 
-## Replay the demo
+The default model is `anthropic/claude-haiku-5.5`, chosen for reliable tool use at low cost. Set `OPENROUTER_MODEL` to use another model that supports tools.
 
-1. Reset demo: clock is 7:04 PM; #1042 has completed 4 of 10 preparation minutes. One prep station is active.
-2. Introduce the eight-minute delay. This is an idempotent event: it adds eight minutes of remaining work to the active job once, not on every click.
-3. Compare the two timelines. The baseline keeps #1042 → #1043 → #1044. Praxis recommends #1042 → #1044 → #1043.
-4. Review & apply the recommendation. Active work stays fixed. Only the pending queue changes; approval persists after reload.
-5. Open Order queue for projected ready times, courier ETAs, pickup deadlines and individual waiting/lateness.
-6. Ask Praxis to explain the recommendation, or change available stations in Kitchen settings. Changing capacity invalidates an earlier approval and recomputes both paths.
+With a key, staff can ask things like "Can we take 4 burgers with a courier in 15 minutes?" or say "the courier for 1043 is 10 minutes late." The assistant is an agent with three tools:
 
-## Reproducible fixture
+- `get_board` reads the live orders and plan.
+- `what_if` tests changes on a private copy using the real planner.
+- `propose_changes` validates changes and shows an **Approve** card.
 
-Times below are minutes after 7 PM.
+The model never does the scheduling. Prep times and every before-and-after number come from the planner, and the card's text is generated from the validated change rather than written by the model. It can't change anything itself: only an Approve tap does, those changes apply all-or-nothing, and one Undo reverses them. It can't mark orders started, ready or picked up.
 
-| Order | Received | Prep minutes | Completed at 7:04 | Courier ETA | Pickup deadline |
-| ----- | -------: | -----------: | ----------------: | ----------: | --------------: |
-| #1042 |        0 |           10 |                 4 |          10 |              12 |
-| #1043 |        1 |           12 |                 0 |          26 |              28 |
-| #1044 |        2 |            4 |                 0 |          18 |              20 |
+Each question is limited to 5 model steps and 500 output tokens per step, and times out after 20 seconds. The model receives ticket numbers, items, times and the menu, not customer names, though anything staff type in a question is sent as written. If AI is unavailable, Praxis falls back to the plan summary.
 
-After the same eight-minute delay:
+## Development
 
-| Metric                |   FCFS | Praxis |
-| --------------------- | -----: | -----: |
-| Total courier waiting | 28 min | 20 min |
-| Total pickup lateness | 22 min | 14 min |
-| Food idle             |  0 min |  0 min |
+```sh
+npm run dev       # hot reload on port 3100
+npm test          # planner, shift rules and storage
+npm run build
+npx playwright install chromium
+npm run test:ui   # needs a current build; starts its own server on 3101 with throwaway data
+```
 
-These are actual engine outputs. Some delay is unavoidable: #1042 is already in progress, so no feasible reordering can remove its eight minutes of courier waiting. Praxis does not pretend all orders become on time.
+`lib/engine.ts` is the planner, `lib/service.ts` holds the shift rules, `lib/store.ts` handles saving, and `components/` holds the screens.
 
-## Model and constraints
+## Presentation
 
-- One station handles one order at a time. Stations are interchangeable. Active preparation is nonpreemptive: the scheduler preserves completed work and never interrupts or restarts it.
-- FCFS assigns pending orders in receipt order to the earliest available station. Praxis enumerates every pending permutation and assigns work to the earliest available station. It finds the exact lowest-score **non-idling list sequence** for this small fixture, not a globally optimal real-world kitchen schedule. Deliberate idling, parallel subtasks, oven dependencies, batching, packaging time and handoff service time are outside the model.
-- Objective: `5 × total pickup lateness + 2 × total courier waiting + total food idle`, all in minutes. Equal scores retain the baseline ordering. Pickup lateness = max(ready − deadline, 0); driver wait = max(ready − courier ETA, 0); food idle = max(courier ETA − ready, 0).
-- Both paths consume the same immutable initial fixture, simulated clock, capacity and disruption. No random estimates or fabricated result metrics.
-- The UI is intentionally scoped to three orders and 1–3 prep stations. No live order feed, courier messaging, staff scheduling, DoorDash API calls, or remote database.
-- LocalStorage stores sample kitchen configuration and approval, using a versioned key independent of the previous seating demo. Reset restores initial conditions. No cross-device synchronization.
-
-## Optional AI
-
-Copy `.env.example` to `.env.local`, set `OPENROUTER_API_KEY`, and restart. `OPENROUTER_MODEL` defaults to `openai/gpt-4o-mini` (configurable). The server uses the AI SDK with an OpenAI-compatible OpenRouter provider. The key is never sent to the browser.
-
-The API validates kitchen state and recomputes deterministic schedules before asking the model to explain the facts. The model has no mutation tools. No key, provider errors or timeouts fall back to local explanations. Requests send the question and sample kitchen state to OpenRouter when configured. Do not use sensitive live merchant data in this prototype. Live provider behavior requires a key and is not covered by the no-key test suite.
-
-## Validation
-
-Engine tests cover identical conditions, idempotent delay, fixture outputs, exact permutation choice, preserved active work, station non-overlap, capacity, malformed state and schedule rejection. Browser tests cover delay → comparison → approval → persisted queue → assistant API response → reset, mobile width, capacity changes, and invalid API input. Production build includes TypeScript checks.
-
-The earlier floor-operations implementation is preserved in commit `28a73ab` on this branch before the kitchen redesign.
-
-## Presentation demo
-
-Open **http://localhost:3100/demo/index.html** for a five-slide walkthrough with screenshots captured from the running app. Use arrow keys or the on-screen arrows to navigate, `F` for fullscreen, and `N` for speaker notes. On a phone on the same Wi-Fi, replace `localhost` with the computer's LAN address. The images are screenshots from the same reproducible sample fixture.
+The slide deck at `/demo/index.html` shows the earlier scripted demo. Its screenshots predate this version.
