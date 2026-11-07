@@ -68,3 +68,7 @@ The API validates kitchen state and recomputes deterministic schedules before as
 Engine tests cover identical conditions, idempotent delay, fixture outputs, exact permutation choice, preserved active work, station non-overlap, capacity, malformed state and schedule rejection. Browser tests cover delay → comparison → approval → persisted queue → assistant API response → reset, mobile width, capacity changes, and invalid API input. Production build includes TypeScript checks.
 
 The earlier floor-operations implementation is preserved in commit `28a73ab` on this branch before the kitchen redesign.
+
+## Presentation demo
+
+Open **http://localhost:3100/demo/index.html** for a five-slide walkthrough with screenshots captured from the running app. Use arrow keys or the on-screen arrows to navigate, `F` for fullscreen, and `N` for speaker notes. On a phone on the same Wi-Fi, replace `localhost` with the computer's LAN address. The images are screenshots from the same reproducible sample fixture.
