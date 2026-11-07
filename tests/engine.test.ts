@@ -1,10 +1,103 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {sample,optimize,act,disrupt,State} from '../lib/engine';
-function feasible(s:State){const r=optimize(s);for(const a of r.assignments){const p=s.parties.find(p=>p.id===a.party)!;assert.ok(s.tables.find(t=>t.id===a.table)!.capacity>=p.size);assert.ok(s.employees.some(e=>e.id===a.server&&e.active&&e.role==='server'));for(const b of r.assignments.filter(b=>b!==a&&b.table===a.table))assert.ok(a.end<=b.start||b.end<=a.start);for(const b of s.parties.filter(p=>p.status==='seated'&&p.table===a.table))assert.ok(a.start>=Math.max(s.now+5,b.end||s.now));}return r}
-test('sample plan is feasible and reproducible',()=>{const s=sample();assert.deepEqual(feasible(s),optimize(s));assert.equal(s.tables.length,10);assert.equal(s.employees.length,5)});
-test('early six-person arrival and delay preserve seated commitments',()=>{const s=sample(),next=disrupt(s);assert.equal(s.parties.find(p=>p.id==='p2')!.end,1140);assert.equal(next.parties.find(p=>p.id==='p2')!.end,1170);const r=feasible(next);const a=r.assignments.find(a=>a.party==='p7')!;assert.ok(a);assert.equal(a.start,next.now);assert.equal(a.table,'T08');for(const p of s.parties.filter(p=>p.status==='seated'))assert.equal(next.parties.find(n=>n.id===p.id)!.table,p.table)});
-test('oversize party remains unassigned',()=>{const s=act(sample(),{type:'walkin',name:'Big',size:20});assert.ok(feasible(s).unassigned.includes(s.parties.at(-1)!.id))});
-test('no active servers means no assignments',()=>{const s=sample();s.employees.forEach(e=>e.active=false);assert.equal(feasible(s).assignments.length,0)});
-test('seating rejects reserved and future plans',()=>{assert.throws(()=>act(sample(),{type:'seat',id:'p6'}));let s=sample();s.tables=s.tables.filter(t=>s.parties.some(p=>p.table===t.id));s=act(s,{type:'walkin',name:'Waiting',size:6});assert.throws(()=>act(s,{type:'seat',id:s.parties.at(-1)!.id}));feasible(s)});
-test('seat, order, delay and depart core flow',()=>{let s=act(sample(),{type:'seat',id:'p5'});assert.equal(s.parties.find(p=>p.id==='p5')!.status,'seated');s=act(s,{type:'order',id:'p5'});assert.equal(s.parties.find(p=>p.id==='p5')!.order,'cooking');s=act(s,{type:'delay',id:'p5'});feasible(s);s=act(s,{type:'depart',id:'p5'});assert.equal(s.parties.find(p=>p.id==='p5')!.status,'done')});
-test('early check-in may seat before reservation time',()=>{const s=act(sample(),{type:'checkin',id:'p7'});assert.equal(feasible(s).assignments.find(a=>a.party==='p7')!.start,s.now)});
-test('callout reallocates only future parties',()=>{const s=disrupt(sample(),'server');const r=feasible(s);assert.ok(r.assignments.every(a=>a.server!=='s2'));assert.equal(s.parties.find(p=>p.id==='p2')!.server,'s2')});
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  fixture,
+  delayed,
+  baseline,
+  optimizeKitchen,
+  metrics,
+  schedule,
+  validateKitchen,
+  Kitchen,
+} from "../lib/kitchen";
+function feasible(k: Kitchen, slots = optimizeKitchen(k).slots) {
+  assert.equal(slots.length, 3);
+  assert.equal(new Set(slots.map((s) => s.id)).size, 3);
+  for (const a of slots) {
+    assert.ok(a.start >= k.now);
+    assert.ok(a.end >= a.start);
+    assert.ok(a.lane < k.capacity);
+    for (const b of slots.filter((b) => b !== a && b.lane === a.lane))
+      assert.ok(a.end <= b.start || b.end <= a.start);
+  }
+  return slots;
+}
+test("same fixture, same delay, reproducible plans", () => {
+  const k = fixture();
+  const d = delayed(k);
+  assert.equal(k.delay, 0);
+  assert.equal(d.delay, 8);
+  assert.deepEqual(optimizeKitchen(d), optimizeKitchen(delayed(fixture())));
+  assert.deepEqual(delayed(d), d);
+});
+test("sad path preserves FCFS and exposes pickup conflicts", () => {
+  const k = delayed(fixture());
+  const slots = feasible(k, baseline(k));
+  assert.deepEqual(
+    slots.map((s) => s.id),
+    ["DD-1042", "DD-1043", "DD-1044"],
+  );
+  assert.deepEqual(
+    slots.map((s) => s.end),
+    [18, 30, 34],
+  );
+  assert.equal(metrics(slots).wait, 28);
+  assert.equal(metrics(slots).lateness, 22);
+});
+test("happy path is optimal among both pending sequences", () => {
+  const k = delayed(fixture());
+  const r = optimizeKitchen(k);
+  feasible(k, r.slots);
+  assert.equal(r.examined, 2);
+  assert.deepEqual(
+    r.slots.map((s) => s.id),
+    ["DD-1042", "DD-1044", "DD-1043"],
+  );
+  assert.deepEqual(
+    r.slots.map((s) => s.end),
+    [18, 22, 34],
+  );
+  assert.equal(r.metrics.wait, 20);
+  assert.equal(r.metrics.lateness, 14);
+  for (const ids of [
+    ["DD-1043", "DD-1044"],
+    ["DD-1044", "DD-1043"],
+  ])
+    assert.ok(r.metrics.score <= metrics(schedule(k, ids)).score);
+});
+test("in-progress preparation never moves or restarts", () => {
+  const k = delayed(fixture());
+  const active = optimizeKitchen(k).slots[0];
+  assert.equal(active.id, "DD-1042");
+  assert.equal(active.start, 4);
+  assert.equal(active.remaining, 14);
+  assert.equal(active.end, 18);
+  assert.equal(k.orders[0].worked, 4);
+});
+test("capacity honored with one, two and three stations", () => {
+  for (const capacity of [1, 2, 3]) {
+    const k = { ...delayed(fixture()), capacity };
+    feasible(k);
+    assert.ok(optimizeKitchen(k).metrics.score <= metrics(baseline(k)).score);
+  }
+});
+test("initial schedule, reset fixture and idle metrics are real", () => {
+  const k = fixture();
+  assert.equal(baseline(k)[0].end, 10);
+  assert.deepEqual(fixture(), k);
+  const r = optimizeKitchen(k);
+  assert.equal(
+    r.slots.reduce((n, s) => n + s.foodIdle, 0),
+    r.metrics.idle,
+  );
+});
+test("invalid capacity, duplicate sequence and malformed state reject", () => {
+  assert.throws(() => baseline({ ...fixture(), capacity: 0 }));
+  assert.throws(() => schedule(fixture(), ["DD-1043", "DD-1043"]));
+  assert.throws(() => schedule(fixture(), ["DD-1043", "DD-1044", "DD-1044"]));
+  const k = fixture();
+  k.orders[0].worked = 100;
+  assert.equal(validateKitchen(k), false);
+  assert.throws(() => baseline(k));
+  assert.equal(validateKitchen({ orders: [] }), false);
+});

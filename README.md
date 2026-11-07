@@ -1,6 +1,6 @@
-# Praxis
+# Praxis — kitchen coordination
 
-A working restaurant operations workspace built with Next.js, TypeScript and Tailwind. No account or API key required.
+Independent restaurant operations prototype for DoorDash merchants. Three sample orders, one unexpected eight-minute preparation delay, and two comparable outcomes. No live DoorDash integration or merchant credentials required.
 
 ## Run
 
@@ -9,46 +9,62 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000 (use the URL printed by Next if the port is occupied).
+Open **http://localhost:3100**. Both development and production bind to `0.0.0.0`, so a phone on the same Wi-Fi can open `http://<your-computer-LAN-IP>:3100`. Each browser keeps its own local state.
 
 ```sh
-npm test           # reproducible deterministic scenarios
-npm run build      # production + TypeScript validation
-npm start          # production server after building
+npm test                 # deterministic engine scenarios
+npm run build            # production compilation and TypeScript
+npm start                # serves production build on port 3100
+npx playwright install chromium
+npm run test:ui          # requires app running on port 3100
 ```
 
-Optional AI: copy `.env.example` to `.env.local`, supply `OPENROUTER_API_KEY`, and restart. The key stays server-side. With a key, restaurant state and questions are sent to OpenRouter. Without one, the local intent parser handles party feasibility, server callouts and service summaries. LLM tools invoke the same deterministic planner; proposals require approval. Arbitrary conversational requests are limited by the selected model; the fallback supports the displayed examples.
+## Replay the demo
 
-## Try the core flow
+1. Reset demo: clock is 7:04 PM; #1042 has completed 4 of 10 preparation minutes. One prep station is active.
+2. Introduce the eight-minute delay. This is an idempotent event: it adds eight minutes of remaining work to the active job once, not on every click.
+3. Compare the two timelines. The baseline keeps #1042 → #1043 → #1044. Praxis recommends #1042 → #1044 → #1043.
+4. Review & apply the recommendation. Active work stays fixed. Only the pending queue changes; approval persists after reload.
+5. Open Order queue for projected ready times, courier ETAs, pickup deadlines and individual waiting/lateness.
+6. Ask Praxis to explain the recommendation, or change available stations in Kitchen settings. Changing capacity invalidates an earlier approval and recomputes both paths.
 
-1. Open Live floor: select tables, check in Davis, seat Thompson, and inspect the kitchen/server loads.
-2. Open What-if lab → **Early party of six + delayed departure**. This creates a copy, extends Williams by 30 minutes, and checks Anderson in 45 minutes early.
-3. Compare: Anderson moves from the planned T07 slot at 7:30 PM to T08 at 6:45 PM. Wilson’s later reservation moves from T08 to T07, avoiding the commitment on T08. Seated guests remain fixed.
-4. Apply to live service. Anderson can now be seated from Up next. Select an occupied table to delay it, advance its order, or mark it departed.
-5. Ask Praxis “Can we accept six people at 7:30?” or “Jamie called out.” Review the proposal before approving.
-6. Team & setup supports table capacity editing, new tables, new staff, and duty toggles. Reservations supports adding bookings. Reset sample service restores the fixture.
+## Reproducible fixture
 
-## Planning assumptions
+Times below are minutes after 7 PM.
 
-- Single simulated evening, initially 6:45 PM. The clock button advances five minutes; there is no background wall-clock drift.
-- One party per table; tables cannot be combined. No seated guests are moved. Seated tables remain blocked until their expected release (overdue parties block at least another five minutes until departure or delay is entered).
-- Reservation intervals are allocated first in arrival order. Checked-in parties can arrive early and are allocated in remaining gaps, using their actual availability now. No assignment overlaps another commitment, exceeds capacity, or selects an inactive server.
-- Five-minute search increments and a three-hour maximum wait. The planner is a deterministic greedy lookahead heuristic, not a guarantee of global optimality. It scores delay first, unused seats next, and balances cumulative planned guest covers among active servers. Durations are averages of sample historical parties within one guest of the requested size, with defaults if no matching records exist.
-- “Delayed / unassigned” means plans starting after the expected arrival, or parties with no feasible fit. It is not a count of overlaps: actual table overlaps are prohibited. Wait is the sum of projected minutes for waiting parties, not a guest-weighted average.
-- Servers have unlimited concurrent guest capacity in this minimal model; workload is a soft objective. A callout prevents new assignments but preserves existing server labels, with an explicit manager handoff warning.
-- Kitchen load is an advisory simplified model: queued/cooking guest covers divided by 12 covers per active cook. It warns managers to pace orders when overloaded. It does not run a kitchen scheduler or block seating.
-- Reservation holds on the floor show planned bookings within 45 minutes. Later bookings appear in the guestbook and planner.
-- Browser localStorage stores the whole service on this device. No backend database, multiuser sync, live POS integration, or automatic provider connection. Use sample names or non-sensitive demo data. Reset is immediate and replaces the local service.
+| Order | Received | Prep minutes | Completed at 7:04 | Courier ETA | Pickup deadline |
+| ----- | -------: | -----------: | ----------------: | ----------: | --------------: |
+| #1042 |        0 |           10 |                 4 |          10 |              12 |
+| #1043 |        1 |           12 |                 0 |          26 |              28 |
+| #1044 |        2 |            4 |                 0 |          18 |              20 |
+
+After the same eight-minute delay:
+
+| Metric                |   FCFS | Praxis |
+| --------------------- | -----: | -----: |
+| Total courier waiting | 28 min | 20 min |
+| Total pickup lateness | 22 min | 14 min |
+| Food idle             |  0 min |  0 min |
+
+These are actual engine outputs. Some delay is unavoidable: #1042 is already in progress, so no feasible reordering can remove its eight minutes of courier waiting. Praxis does not pretend all orders become on time.
+
+## Model and constraints
+
+- One station handles one order at a time. Stations are interchangeable. Active preparation is nonpreemptive: the scheduler preserves completed work and never interrupts or restarts it.
+- FCFS assigns pending orders in receipt order to the earliest available station. Praxis enumerates every pending permutation and assigns work to the earliest available station. It finds the exact lowest-score **non-idling list sequence** for this small fixture, not a globally optimal real-world kitchen schedule. Deliberate idling, parallel subtasks, oven dependencies, batching, packaging time and handoff service time are outside the model.
+- Objective: `5 × total pickup lateness + 2 × total courier waiting + total food idle`, all in minutes. Equal scores retain the baseline ordering. Pickup lateness = max(ready − deadline, 0); driver wait = max(ready − courier ETA, 0); food idle = max(courier ETA − ready, 0).
+- Both paths consume the same immutable initial fixture, simulated clock, capacity and disruption. No random estimates or fabricated result metrics.
+- The UI is intentionally scoped to three orders and 1–3 prep stations. No live order feed, courier messaging, staff scheduling, DoorDash API calls, or remote database.
+- LocalStorage stores sample kitchen configuration and approval, using a versioned key independent of the previous seating demo. Reset restores initial conditions. No cross-device synchronization.
+
+## Optional AI
+
+Copy `.env.example` to `.env.local`, set `OPENROUTER_API_KEY`, and restart. `OPENROUTER_MODEL` defaults to `openai/gpt-4o-mini` (configurable). The server uses the AI SDK with an OpenAI-compatible OpenRouter provider. The key is never sent to the browser.
+
+The API validates kitchen state and recomputes deterministic schedules before asking the model to explain the facts. The model has no mutation tools. No key, provider errors or timeouts fall back to local explanations. Requests send the question and sample kitchen state to OpenRouter when configured. Do not use sensitive live merchant data in this prototype. Live provider behavior requires a key and is not covered by the no-key test suite.
 
 ## Validation
 
-`npm test` covers capacity, overlap avoidance, unavailable servers, early check-in, delayed departure, immutable seated commitments, unassignable parties, seating guards, and order/departure transitions. `npm run build` checks production compilation and types. OpenRouter live calls require your own key and are not part of the automated test suite.
+Engine tests cover identical conditions, idempotent delay, fixture outputs, exact permutation choice, preserved active work, station non-overlap, capacity, malformed state and schedule rejection. Browser tests cover delay → comparison → approval → persisted queue → assistant API response → reset, mobile width, capacity changes, and invalid API input. Production build includes TypeScript checks.
 
-Browser checks (requires a running app on port 3000):
-
-```sh
-npx playwright install chromium
-npm run test:ui
-```
-
-The browser suite verifies the applied disruption, reload persistence, local assistant proposal approval UI, and a 390px viewport without horizontal overflow. Live OpenRouter calls are not verified without credentials. Dependency audit is clean; a PostCSS override keeps Next's transitive version patched.
+The earlier floor-operations implementation is preserved in commit `28a73ab` on this branch before the kitchen redesign.

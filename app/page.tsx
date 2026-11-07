@@ -1,23 +1,984 @@
-'use client';
-import {useEffect,useState} from 'react';
-import {ArrowUpRight,ArrowRight,Plus,Users,Clock3,ChevronDown,Check,LayoutGrid,CalendarDays,FlaskConical,Settings2,MessageSquare,Sparkles,UtensilsCrossed,Activity,X,RotateCcw,Send,Sun,CheckCircle2} from 'lucide-react';
-import {State,Party,Action,sample,optimize,act,clock,disrupt} from '@/lib/engine';
-export default function Home(){const [s,setS]=useState<State>(sample);const [ready,setReady]=useState(false);const [tab,setTab]=useState('Live floor');const [selected,setSelected]=useState('T07');const [filter,setFilter]=useState('All');const [modal,setModal]=useState('');const [error,setError]=useState('');const [toast,setToast]=useState('');const [scenario,setScenario]=useState<State|null>(null);const [name,setName]=useState('');const [size,setSize]=useState(2);const [time,setTime]=useState('19:30');const [query,setQuery]=useState('');const [answer,setAnswer]=useState('Ask about tonight’s service, or try “Can we accept six people at 7:30?”');const [busy,setBusy]=useState(false);const [proposal,setProposal]=useState<State|null>(null);
-useEffect(()=>{try{const raw=localStorage.getItem('praxis-v1');if(raw){const v=JSON.parse(raw);if(Array.isArray(v.tables)&&Array.isArray(v.parties)&&Array.isArray(v.employees)&&Array.isArray(v.history)&&Array.isArray(v.log)&&Number.isFinite(v.now))setS(v)}}catch{setError('Saved service could not be loaded. The sample service is ready.')}setReady(true)},[]);useEffect(()=>{if(ready){try{localStorage.setItem('praxis-v1',JSON.stringify(s))}catch{setError('Local storage is unavailable or full. Changes remain in this tab but cannot be saved.')}}},[s,ready]);useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(t)}},[toast]);
-const plan=optimize(s),view=scenario||s,vp=optimize(view);const seated=s.parties.filter(p=>p.status==='seated');const waiting=s.parties.filter(p=>p.status==='waiting');const occupied=seated.length;const run=(a:Action)=>{try{setS(act(s,a));setError('');setToast('Service updated. Seating plan recalculated.')}catch(e){setError((e as Error).message)}};
-const server=(id?:string)=>s.employees.find(e=>e.id===id)?.name||'Unassigned';const reservation=(id:string)=>s.parties.find(p=>p.id===id);const add=()=>{try{const [h,m]=time.split(':').map(Number);setS(act(s,{type:'walkin',name,size,time:modal==='reservation'?h*60+m:undefined}));setModal('');setName('');setError('')}catch(e){setError((e as Error).message)}};
-async function ask(){if(!query.trim())return;setBusy(true);try{const q=query.toLowerCase();let candidate:State|null=null;let result='';if(/called out|call out|unavailable/.test(q)){const employee=s.employees.find(e=>e.role==='server'&&e.active&&q.includes(e.name.toLowerCase()))||s.employees.find(e=>e.role==='server'&&e.active);if(employee){candidate=act(s,{type:'callout',id:employee.id});result=`Proposal: mark ${employee.name} unavailable. Seated guests stay at their tables; new assignments go to active servers. Existing guests assigned to ${employee.name} need a manager-led handoff.`}}else if(/accept|people|party|guests/.test(q)){const n=Number(q.match(/\b(\d+)\s*(people|guests|person)/)?.[1]||(/six/.test(q)?6:4));const match=q.match(/(\d{1,2}):(\d{2})/);const when=match?(Number(match[1])%12+12)*60+Number(match[2]):s.now;candidate=act(s,{type:'walkin',name:'Assistant proposal',size:n,time:Math.max(s.now,when)});const p=candidate.parties[candidate.parties.length-1];const r=optimize(candidate).assignments.find(a=>a.party===p.id);result=r?`We can fit ${n} guests at ${clock(r.start)} on ${r.table}, with ${server(r.server)}. ${r.start>when?`That is ${r.start-when} minutes after the requested time. `:''}${r.reason}. This is a proposal; approve to add the party.`:'No feasible assignment within the three-hour planning window. Try a smaller party or a different time.';if(!r)candidate=null;}else result=`Tonight: ${seated.length} occupied tables, ${waiting.length} waiting parties. Projected wait totals ${plan.wait} party-minutes; ${plan.conflicts} plans start late or remain unassigned. Kitchen: ${plan.kitchen}/${plan.capacity} guest covers in progress. Reservations are protected before walk-ins.`;setProposal(candidate);setAnswer(result);const response=await fetch('/api/assistant',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:query,facts:result,state:s})});const data=await response.json();if(data.explanation)setAnswer(data.handled?data.explanation:data.explanation+'\n\n'+result);if(data.handled)setProposal(data.proposal||null);}catch{setAnswer('The assistant could not complete that request. Try “Can we accept six people at 7:30?” or “Alex called out.”')}finally{setBusy(false)}}
-const tableParty=s.parties.find(p=>p.table===selected&&p.status==='seated');const selectedTable=s.tables.find(t=>t.id===selected);const upcoming=plan.assignments.find(a=>a.table===selected);
-return <div className="app"><aside className="sidebar"><a className="brand" href="/">p<span>raxis</span><i/></a><div className="restaurant"><div className="restaurant-icon">W</div><div><b>The Willow Room</b><small>Restaurant workspace</small></div><ChevronDown size={15}/></div><div className="nav-label">WORKSPACE</div><nav>{[{label:'Live floor',icon:LayoutGrid},{label:'Reservations',icon:CalendarDays},{label:'Team & setup',icon:Users},{label:'What-if lab',icon:FlaskConical}].map(n=><button key={n.label} className={tab===n.label?'active':''} onClick={()=>setTab(n.label)}><n.icon size={18}/>{n.label}{n.label==='Live floor'&&<span className="live-dot"/>}</button>)}</nav><div className="sidebar-note"><div className="leaf">✳</div><b>A little foresight.<br/>A smoother service.</b><p>Every table, every arrival.<br/>One step ahead.</p></div><div className="sidebar-bottom"><span className="avatar">EL</span><div><b>Emma Laurent</b><small>Floor manager</small></div><Settings2 size={17}/></div></aside>
-<div className="workspace"><header><div className="breadcrumb">The Willow Room <span>/</span> {tab}</div><div className="header-right"><span className="demo-pill">SAMPLE SERVICE</span><span className="dot"/>All changes saved locally<button className="icon-button" aria-label="Toggle theme" onClick={()=>document.documentElement.classList.toggle('dark')}><Sun size={17}/></button></div></header><main><div className="page-heading"><div><div className="eyebrow">SATURDAY, NOVEMBER 7 <span>•</span> DINNER SERVICE</div><h1>{tab==='Live floor'?'A smoother service starts here.':tab==='Reservations'?'A place for everyone.':tab==='Team & setup'?'Set your service up for success.':'See the next move, before it happens.'}</h1><p>Your floor, in real time. A clear plan for whatever comes next.</p></div><button className="primary" onClick={()=>{setModal('walkin');setError('')}}><Plus size={17}/>Add walk-in</button></div>
-<div className="stats"><div><span>On the floor <Users size={15}/></span><b>{seated.reduce((a,p)=>a+p.size,0)}<small>guests</small></b><em>{occupied} of {s.tables.length} tables occupied</em></div><div><span>Arriving tonight <CalendarDays size={15}/></span><b>{s.parties.filter(p=>p.status==='reserved').length}<small>parties</small></b><em>Next at {clock(Math.min(...s.parties.filter(p=>p.status==='reserved').map(p=>p.time),1440))}</em></div><div><span>Waiting to be seated <Clock3 size={15}/></span><b>{waiting.length}<small>{waiting.length===1?'party':'parties'}</small></b><em className="green">{plan.wait===0?'Ready for a warm welcome':`${plan.wait} projected party-minutes`}</em></div><div><span>Kitchen pulse <UtensilsCrossed size={15}/></span><b>{plan.capacity?Math.round(plan.kitchen/plan.capacity*100):100}<small>% capacity</small></b><em className={plan.kitchen<=plan.capacity?'green':'amber'}>{plan.kitchen<=plan.capacity?'Comfortably in flow':'Pace new orders'} · {s.employees.filter(e=>e.role==='cook'&&e.active).length} cooks</em></div></div>
-{error&&<div role="alert" className="error">{error}<button onClick={()=>setError('')} aria-label="Dismiss error"><X size={16}/></button></div>}
-{tab==='Live floor'&&<div className="floor-grid"><section className="panel floor-panel"><div className="panel-title"><div><h2>Live floor <span className="live-label"><i/>LIVE</span></h2><p>A good view of the room. An even better view of what’s next.</p></div><button className="subtle" onClick={()=>run({type:'advance'})}><Clock3 size={15}/>{clock(s.now)} <Plus size={13}/></button></div><div className="floor-toolbar"><div className="segments">{['All','Available','Occupied','Reserved'].map(f=><button className={filter===f?'chosen':''} onClick={()=>setFilter(f)} key={f}>{f}</button>)}</div><span>Main dining room <ChevronDown size={13}/></span></div><div className="floor"><div className="window-label">W I N D O W S</div><div className="floor-room"><div className="banquette"/>{s.tables.map((t,i)=>{const p=seated.find(p=>p.table===t.id);const hold=plan.assignments.find(a=>a.table===t.id&&reservation(a.party)?.status==='reserved'&&a.start<=s.now+45);const status=p?'Occupied':hold?'Reserved':'Available';return <button key={t.id} aria-label={`${t.id}, ${t.capacity} seats, ${status}`} className={`table-spot spot-${i} ${status.toLowerCase()} ${selected===t.id?'selected':''} ${filter!=='All'&&filter!==status?'faded':''}`} onClick={()=>setSelected(t.id)}><div className={`table-shape ${t.capacity===2?'round':''} ${t.capacity===6?'large':''}`}><i className="chair c1"/><i className="chair c2"/>{t.capacity>=4&&<><i className="chair c3"/><i className="chair c4"/></>}{t.capacity>=6&&<><i className="chair c5"/><i className="chair c6"/></>}<b>{t.id}</b><span>{p?`${p.size} guests`:`${t.capacity} seats`}</span></div><small>{p?`${p.name} · ${clock(p.end||s.now)}`:hold?`Held · ${clock(hold.start)}`:'Available'}</small>{p&&<em><span className={`server-dot ${p.server}`}/>{server(p.server)}</em>}</button>})}<div className="entry">ENTRANCE <ArrowUpRight size={14}/></div><div className="bar">BAR & HOST STATION</div></div></div><div className="legend"><span><i className="available"/>Available</span><span><i className="occupied"/>Occupied</span><span><i className="reserved"/>Reservation hold</span><span className="legend-end">Click a table to see details <ArrowUpRight size={13}/></span></div></section>
-<aside className="right-rail"><section className="panel arrivals"><div className="panel-title"><h2>Up next <span className="count">{s.parties.filter(p=>p.status==='waiting'||p.status==='reserved').length}</span></h2><button className="text-button" onClick={()=>setTab('Reservations')}>View all <ArrowRight size={14}/></button></div><div className="arrival-list">{s.parties.filter(p=>p.status==='waiting'||p.status==='reserved').sort((a,b)=>(a.status==='waiting'?-1:1)-(b.status==='waiting'?-1:1)||a.time-b.time).slice(0,4).map(p=>{const r=plan.assignments.find(a=>a.party===p.id);return <div className="arrival" key={p.id}><div className="party-avatar">{p.name.slice(0,1)}</div><div className="arrival-info"><b>{p.name} <span>· {p.size} guests</span></b><small>{p.status==='waiting'?<span className="green">● Checked in</span>:clock(p.time)} <span>· {r?.table||'No fit'}</span></small></div><button className={p.status==='waiting'?'seat-button':'check-button'} disabled={p.status==='waiting'&&(!r||r.start>s.now)} onClick={()=>run({type:p.status==='waiting'?'seat':'checkin',id:p.id})}>{p.status==='waiting'?'Seat':'Check in'}</button></div>})}</div><div className="recommendation"><Sparkles size={17}/><div><b>A little ahead of the rush</b><p>{plan.conflicts?`${plan.conflicts} assignment(s) need extra time. Open the what-if lab to explore options.`:'Upcoming reservations are protected. The current plan fits every expected party.'}</p><button onClick={()=>{setTab('What-if lab');setScenario(disrupt(s))}}>Explore a scenario <ArrowRight size={13}/></button></div></div></section>
-<section className="panel table-detail"><div className="panel-title"><h2>{selected} <span className="muted">· {selectedTable?.capacity} seats</span></h2><span className={`status ${tableParty?'occupied':'available'}`}>{tableParty?'Occupied':'Available'}</span></div>{tableParty?<><h3>{tableParty.name}</h3><div className="detail-rows"><span>Guests <b>{tableParty.size} people</b></span><span>Server <b>{server(tableParty.server)}</b></span><span>Expected release <b>{clock(tableParty.end||s.now)}</b></span><span>Order status <b>{tableParty.order}</b></span></div><div className="detail-actions"><button onClick={()=>run({type:'delay',id:tableParty.id})}>+30 min delay</button><button onClick={()=>run({type:'depart',id:tableParty.id})}>Mark departed</button></div><button className="text-button order" onClick={()=>run({type:'order',id:tableParty.id})}>Advance order status <ArrowRight size={13}/></button></>:<><h3>Ready for the next hello.</h3><p>{upcoming?`Next planned: ${reservation(upcoming.party)?.name}, ${clock(upcoming.start)}.`:'No upcoming commitments.'}</p></>}</section></aside></div>}
-{tab==='Reservations'&&<section className="panel reservation-panel"><div className="panel-title"><h2>Tonight’s guestbook</h2><button className="primary" onClick={()=>setModal('reservation')}><Plus size={16}/>New reservation</button></div><div className="table-scroll"><table><thead><tr><th>Guest</th><th>Party</th><th>Arrival</th><th>Status</th><th>Plan</th><th>Action</th></tr></thead><tbody>{s.parties.map(p=>{const r=plan.assignments.find(a=>a.party===p.id);return <tr key={p.id}><td><b>{p.name}</b></td><td>{p.size} guests</td><td>{clock(p.time)}</td><td><span className="status">{p.status}</span></td><td>{p.status==='seated'?p.table:r?`${r.table} · ${clock(r.start)}`:'—'}</td><td>{p.status==='reserved'&&<button onClick={()=>run({type:'checkin',id:p.id})}>Check in</button>}{p.status==='waiting'&&<button disabled={!r||r.start>s.now} onClick={()=>run({type:'seat',id:p.id})}>Seat party</button>}{p.status==='seated'&&<button onClick={()=>run({type:'depart',id:p.id})}>Depart</button>}</td></tr>})}</tbody></table></div></section>}
-{tab==='Team & setup'&&<div className="setup-grid"><section className="panel"><div className="panel-title"><h2>Tonight’s team</h2><span className="muted">Click to change availability</span></div>{s.employees.map(e=><div className="team-row" key={e.id}><span className="party-avatar">{e.name[0]}</span><div><b>{e.name}</b><small>{e.role} {e.role==='server'?`· ${plan.loads[e.id]||0} planned covers`: '· 12 covers capacity'}</small></div><button className={e.active?'status available':'status'} onClick={()=>run({type:'callout',id:e.id})}>{e.active?'On duty':'Unavailable'}</button></div>)}<p className="setup-note">Existing tables keep their assigned server during a callout. Arrange a handoff with the team; new seating uses active servers.</p><button className="subtle" onClick={()=>setModal('employee')}><Plus size={15}/>Add employee</button></section><section className="panel"><div className="panel-title"><h2>Tables & capacities</h2><button className="subtle" onClick={()=>setModal('table')}><Plus size={14}/>Add table</button></div>{s.tables.map(t=><div className="capacity-row" key={t.id}><b>{t.id}</b><span>Guest capacity</span><input aria-label={`${t.id} capacity`} type="number" min="1" max="20" value={t.capacity} onChange={e=>{const n=Number(e.target.value);if(!Number.isInteger(n)||n<1||n>20)return;if(seated.some(p=>p.table===t.id&&p.size>n)){setError('Capacity cannot be lower than the seated party.');return}setS({...s,tables:s.tables.map(x=>x.id===t.id?{...x,capacity:n}:x)})}}/></div>)}</section></div>}
-{tab==='What-if lab'&&<section className="panel lab"><div className="panel-title"><div><h2>A safe space for the unexpected</h2><p>Explore a copy of your live service. Changes only go live when you apply them.</p></div><FlaskConical size={24}/></div><div className="scenario-buttons"><button onClick={()=>setScenario(disrupt(s))}><Sparkles size={18}/>Early party of six + delayed departure</button><button onClick={()=>setScenario(disrupt(s,'server'))}><Users size={18}/>Jamie calls out</button><button onClick={()=>setScenario(disrupt(s,'walkin'))}><Plus size={18}/>Unexpected party of four</button></div>{scenario?<><div className="comparison"><div><small>LIVE SERVICE</small><h3>{plan.wait} <span>party-minutes waiting</span></h3><p>{plan.conflicts} delayed / unassigned · {plan.assignments.length} planned parties</p></div><ArrowRight/><div><small>REVISED PLAN</small><h3>{vp.wait} <span>party-minutes waiting</span></h3><p>{vp.conflicts} delayed / unassigned · {vp.assignments.length} planned parties</p></div></div><div className="scenario-explanation"><Sparkles size={18}/><p>The revised plan keeps every seated party in place and protects table commitments. {scenario.parties.find(p=>p.id==='p7')?.status==='waiting'&&<>Anderson can use T08 now. Holding Wilson on T08 would block that early seating, so Wilson moves to T07 after Williams departs. </>} {vp.wait>plan.wait?'Extra waiting is necessary to avoid overlapping reservations.':'Available capacity absorbs the change without adding projected wait.'} Active servers receive new assignments based on their projected guest load.</p></div><div className="table-scroll"><table><thead><tr><th>Party</th><th>Before</th><th>Revised assignment</th><th>Why it works</th></tr></thead><tbody>{vp.assignments.map(a=>{const old=plan.assignments.find(x=>x.party===a.party);return <tr key={a.party}><td><b>{view.parties.find(p=>p.id===a.party)?.name}</b></td><td>{old?`${old.table} · ${clock(old.start)}`:'New arrival'}</td><td className={old?.table!==a.table||old?.start!==a.start?'green':''}>{a.table} · {clock(a.start)} · {server(a.server)}</td><td className="reason">{a.reason}</td></tr>})}</tbody></table></div>{vp.unassigned.length>0&&<p className="error">{vp.unassigned.length} parties have no feasible assignment. Applying does not seat them.</p>}<div className="lab-actions"><button className="subtle" onClick={()=>setScenario(null)}>Discard scenario</button><button className="primary" onClick={()=>{setS(scenario);setScenario(null);setToast('Scenario applied to live service.')}}><Check size={16}/>Apply to live service</button></div></>:<div className="empty-lab"><FlaskConical size={40}/><h3>What happens if…?</h3><p>Choose a disruption above to see a real, recalculated seating plan.</p></div>}</section>}
-<div className="bottom-grid"><section className="panel workload"><div className="panel-title"><h2>A balanced team</h2><span className="muted">Seated + planned covers</span></div><div className="workload-bars">{s.employees.filter(e=>e.role==='server').map(e=><div key={e.id}><span className={`avatar ${e.id}`}>{e.name[0]}</span><div><b>{e.name}<small>{e.active?'On duty':'Unavailable'}</small></b><div className="bar-track"><i className={e.id} style={{width:`${Math.min(100,(plan.loads[e.id]||0)/30*100)}%`}}/></div></div><strong>{plan.loads[e.id]||0}</strong></div>)}</div></section><section className="service-note"><div className="note-icon"><Activity size={22}/></div><div><h3>Built for the rhythm of your restaurant.</h3><p>Every arrival updates the plan. Every decision stays yours.</p><button onClick={()=>setModal('assistant')}>Meet your service assistant <ArrowRight size={14}/></button></div><span className="note-decoration">✳</span></section></div><footer><span><span className="dot"/>Deterministic planning · Local demo</span><button onClick={()=>{setS(sample());setScenario(null);setToast('Sample restaurant restored.')}}><RotateCcw size={12}/>Reset sample service</button></footer>
-</main></div><button className="assistant-fab" onClick={()=>setModal('assistant')}><Sparkles size={18}/>Ask Praxis <span>↗</span></button>{toast&&<div className="toast" role="status"><CheckCircle2 size={18}/>{toast}</div>}
-{modal&&<div className="modal-overlay" onClick={()=>setModal('')}><section className="modal" role="dialog" aria-modal="true" aria-label={modal} onClick={e=>e.stopPropagation()}><button className="modal-close" aria-label="Close dialog" onClick={()=>setModal('')}><X size={20}/></button>{modal==='assistant'?<><div className="eyebrow"><Sparkles size={16}/>YOUR SERVICE COPILOT</div><h2>A little clarity for the next move.</h2><p className="assistant-answer">{answer}</p><div className="suggestions"><button onClick={()=>setQuery('Can we accept six people at 7:30?')}>Six people at 7:30?</button><button onClick={()=>setQuery('Jamie called out')}>Jamie called out</button></div><form onSubmit={e=>{e.preventDefault();ask()}}><label>Ask about your service<input autoFocus value={query} onChange={e=>setQuery(e.target.value)} placeholder="What would you like to know?"/></label><button className="primary" disabled={busy}>{busy?'Thinking…':'Ask Praxis'}<Send size={15}/></button></form>{proposal&&<button className="approve" onClick={()=>{setS(proposal);setProposal(null);setAnswer('Approved. Your live service has been updated.');setToast('Assistant proposal applied.')}}><Check size={16}/>Approve proposed change</button>}<small className="muted">Deterministic scheduling tools · optional OpenRouter explanations</small></>:<><div className="eyebrow">MAKE ROOM FOR A GREAT EVENING</div><h2>{modal==='walkin'?'Welcome a walk-in.':modal==='reservation'?'Save them a seat.':modal==='table'?'Add a table.':'Add a teammate.'}</h2><form onSubmit={e=>{e.preventDefault();if(modal==='table'){const id=`T${String(s.tables.length+1).padStart(2,'0')}`;setS({...s,tables:[...s.tables,{id,capacity:size,x:0,y:0}]});setModal('')}else if(modal==='employee'){if(!name.trim())return;setS({...s,employees:[...s.employees,{id:`e${Date.now()}`,name:name.trim(),role:time==='cook'?'cook':'server',active:true}]});setModal('');setName('')}else add()}}>{modal!=='table'&&<label>{modal==='employee'?'Employee name':'Guest name'}<input required autoFocus value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Taylor"/></label>}{modal==='employee'?<label>Role<select value={time==='cook'?'cook':'server'} onChange={e=>setTime(e.target.value)}><option value="server">Server</option><option value="cook">Cook</option></select></label>:<label>{modal==='table'?'Table capacity':'Party size'}<input required type="number" min="1" max="20" value={size} onChange={e=>setSize(Number(e.target.value))}/></label>}{modal==='reservation'&&<label>Arrival time<input required type="time" value={time.includes(':')?time:'19:30'} onChange={e=>setTime(e.target.value)}/></label>}{error&&<p className="error">{error}</p>}<button className="primary" type="submit"><Plus size={16}/>{modal==='walkin'?'Add to waitlist':'Save'}</button></form></>}</section></div>}</div>}
+"use client";
+import { useEffect, useState, useRef } from "react";
+import {
+  Activity,
+  ArrowDown,
+  ArrowRight,
+  ArrowUpRight,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  ChefHat,
+  Clock3,
+  Flame,
+  LayoutDashboard,
+  MessageSquare,
+  Play,
+  RotateCcw,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  Truck,
+  Users,
+  X,
+  Zap,
+} from "lucide-react";
+import {
+  Kitchen,
+  Slot,
+  fixture,
+  delayed,
+  baseline,
+  optimizeKitchen,
+  metrics,
+  time,
+  validateKitchen,
+} from "@/lib/kitchen";
+function Timeline({
+  k,
+  slots,
+  kind,
+}: {
+  k: Kitchen;
+  slots: Slot[];
+  kind: "baseline" | "praxis";
+}) {
+  const horizon = Math.max(40, ...slots.map((s) => s.end + 4));
+  const pct = (n: number) => `${(n / horizon) * 100}%`;
+  return (
+    <div className="timeline">
+      <div className="timeline-axis">
+        <span>ORDER</span>
+        <div>
+          {[0, 10, 20, 30, 40].map((n) => (
+            <small key={n} style={{ left: pct(n) }}>
+              {n === 0 ? "7:00" : `7:${n}`}
+            </small>
+          ))}
+        </div>
+      </div>
+      {k.orders.map((o, i) => {
+        const slot = slots.find((s) => s.id === o.id)!;
+        return (
+          <div className="timeline-row" key={o.id}>
+            <div className="timeline-label">
+              <i className={`order-dot color-${i}`} />
+              <div>
+                <b>#{o.id.slice(3)}</b>
+                <small>{o.customer}</small>
+              </div>
+            </div>
+            <div className="track">
+              {[0, 10, 20, 30, 40].map((n) => (
+                <i className="gridline" key={n} style={{ left: pct(n) }} />
+              ))}
+              {o.started !== undefined && (
+                <div
+                  className={`prep-bar elapsed color-${i}`}
+                  style={{
+                    left: pct(o.started),
+                    width: pct(k.now - o.started),
+                  }}
+                />
+              )}
+              <div
+                className={`prep-bar color-${i} ${kind === "praxis" ? "optimized" : ""}`}
+                style={{ left: pct(slot.start), width: pct(slot.remaining) }}
+                title={`${time(slot.start)}–${time(slot.end)}, station ${slot.lane + 1}`}
+              >
+                <span>{slot.remaining}m</span>
+              </div>
+              {slot.driverWait > 0 && (
+                <div
+                  className="waiting-bar"
+                  title={`Courier waits ${slot.driverWait} minutes`}
+                  style={{ left: pct(o.arrival), width: pct(slot.driverWait) }}
+                />
+              )}
+              {slot.foodIdle > 0 && (
+                <div
+                  className="idle-bar"
+                  title={`Food sits ${slot.foodIdle} minutes`}
+                  style={{ left: pct(slot.end), width: pct(slot.foodIdle) }}
+                />
+              )}
+              <span
+                className="courier-marker"
+                title={`Courier ETA ${time(o.arrival)}`}
+                style={{ left: pct(o.arrival) }}
+              >
+                <Truck size={12} />
+              </span>
+              <span
+                className="deadline-marker"
+                title={`Pickup deadline ${time(o.deadline)}`}
+                style={{ left: pct(o.deadline) }}
+              />
+              <span className="end-time" style={{ left: pct(slot.end) }}>
+                {time(slot.end).replace(" PM", "")}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+      <div className="timeline-footer">
+        <span>
+          <i className="legend-solid" />
+          Preparation
+        </span>
+        <span>
+          <i className="legend-wait" />
+          Courier waiting
+        </span>
+        <span>
+          <Truck size={12} />
+          Courier ETA
+        </span>
+        <span>
+          <i className="legend-deadline" />
+          Pickup deadline
+        </span>
+      </div>
+    </div>
+  );
+}
+export default function Home() {
+  const [k, setK] = useState<Kitchen>(fixture);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("Service overview");
+  const [mode, setMode] = useState<"compare" | "baseline" | "praxis">(
+    "compare",
+  );
+  const [applied, setApplied] = useState(false);
+  const [modal, setModal] = useState("");
+  const [toast, setToast] = useState("");
+  const [query, setQuery] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [storageError, setStorageError] = useState("");
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("praxis-kitchen-v1");
+      if (raw) {
+        const saved = JSON.parse(raw);
+        if (validateKitchen(saved.k)) {
+          setK(saved.k);
+          setApplied(saved.applied === true);
+        }
+      }
+    } catch {
+      setStorageError("Could not load saved service. A fresh sample is ready.");
+    }
+    setLoaded(true);
+  }, []);
+  useEffect(() => {
+    if (loaded)
+      try {
+        localStorage.setItem(
+          "praxis-kitchen-v1",
+          JSON.stringify({ k, applied }),
+        );
+      } catch {
+        setStorageError(
+          "Changes cannot be saved in this browser. Your current session still works.",
+        );
+      }
+  }, [k, applied, loaded]);
+  useEffect(() => {
+    if (toast) {
+      const t = setTimeout(() => setToast(""), 3500);
+      return () => clearTimeout(t);
+    }
+  }, [toast]);
+  const dialogRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!modal) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    const focusables = () =>
+      Array.from(
+        dialog?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled),input,select,[tabindex="0"]',
+        ) || [],
+      );
+    focusables()[0]?.focus();
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setModal("");
+      if (e.key === "Tab") {
+        const items = focusables();
+        const first = items[0],
+          last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => {
+      document.removeEventListener("keydown", handler);
+      previous?.focus();
+    };
+  }, [modal]);
+  const sad = baseline(k),
+    happy = optimizeKitchen(k),
+    before = metrics(sad),
+    after = happy.metrics;
+  const saved = before.wait - after.wait;
+  const live = applied ? happy.slots : sad;
+  const reset = () => {
+    setK(fixture());
+    setApplied(false);
+    setAnswer("");
+    setToast("Same initial conditions restored. Ready to replay.");
+  };
+  const introduce = () => {
+    setK(delayed(k));
+    setApplied(false);
+    setToast("Eight-minute delay recorded. Both plans recalculated.");
+  };
+  const approve = () => {
+    setApplied(true);
+    setModal("");
+    setToast("Revised preparation queue approved. Active work stays in place.");
+  };
+  const pending = happy.slots.filter(
+    (s) => k.orders.find((o) => o.id === s.id)?.started === undefined,
+  );
+  const explain = `${k.delay ? "The eight-minute delay extends order #1042 to 7:18 PM." : "No delay is currently active."} ${k.capacity === 1 && k.delay ? "Keep #1042 in progress, then prepare #1044 (7:18–7:22), followed by #1043 (7:22–7:34)." : `The recommended pending sequence is ${pending.map((s) => "#" + s.id.slice(3)).join(" → ")}.`} This reduces total courier waiting from ${before.wait} to ${after.wait} minutes and pickup lateness from ${before.lateness} to ${after.lateness} minutes. ${after.late} order(s) still miss their pickup deadline; this plan does not promise to recover time already lost. Search evaluated ${happy.examined} sequences; active preparation is never interrupted.`;
+  async function ask() {
+    if (!query.trim()) return;
+    setBusy(true);
+    setAnswer(explain);
+    try {
+      const r = await fetch("/api/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: query, kitchen: k }),
+      });
+      const d = await r.json();
+      if (d.explanation) setAnswer(d.explanation);
+    } catch {
+      setAnswer(
+        explain + " Local explanation shown; the AI service is unavailable.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="shell">
+      <aside className="sidebar">
+        <a className="brand" href="/">
+          praxis<span>✳</span>
+        </a>
+        <div className="merchant">
+          <div className="merchant-avatar">W</div>
+          <div>
+            <b>The Willow Kitchen</b>
+            <small>Merchant workspace</small>
+          </div>
+          <ChevronDown size={13} />
+        </div>
+        <div className="nav-label">YOUR WORKSPACE</div>
+        <nav>
+          {[
+            { name: "Service overview", icon: LayoutDashboard },
+            { name: "Order queue", icon: ChefHat },
+            { name: "Scenario lab", icon: Activity },
+          ].map((t) => (
+            <button
+              key={t.name}
+              className={tab === t.name ? "active" : ""}
+              onClick={() => setTab(t.name)}
+              aria-label={t.name}
+            >
+              <t.icon size={18} />
+              <span>{t.name}</span>
+              {t.name === "Service overview" && <i />}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-story">
+          <span>✳</span>
+          <h3>
+            Calm in the
+            <br />
+            middle of the rush.
+          </h3>
+          <p>
+            A clearer next move.
+            <br />
+            For your kitchen and your couriers.
+          </p>
+          <div className="partner-label">
+            <Truck size={13} />
+            Made for delivery operations
+          </div>
+        </div>
+        <div className="profile">
+          <span>EL</span>
+          <div>
+            <b>Emma Laurent</b>
+            <small>Kitchen manager</small>
+          </div>
+          <Settings2 size={16} />
+        </div>
+      </aside>
+      <div className="workspace">
+        <header>
+          <div>
+            The Willow Kitchen <span>/</span> {tab}
+          </div>
+          <div className="header-status">
+            <span className="sample-badge">INTERACTIVE DEMO</span>
+            <i />
+            Saved on this device{" "}
+            <button
+              aria-label="About this demo"
+              onClick={() => setModal("about")}
+            >
+              <ShieldCheck size={17} />
+            </button>
+          </div>
+        </header>
+        <main>
+          <div className="heading">
+            <div className="eyebrow">
+              DINNER SERVICE <i /> SATURDAY, NOVEMBER 7
+            </div>
+            <div className="title-row">
+              <div>
+                <h1>Keep the kitchen one step ahead.</h1>
+                <p>A little coordination. Less waiting. Better pickups.</p>
+              </div>
+              <div className="heading-actions">
+                <button className="secondary" onClick={reset}>
+                  <RotateCcw size={14} />
+                  Reset demo
+                </button>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setModal("assistant");
+                    setAnswer(explain);
+                  }}
+                >
+                  <Sparkles size={15} />
+                  Ask Praxis
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="service-strip">
+            <span>
+              <i className="green-dot" />
+              DINNER RUSH
+            </span>
+            <div>
+              <Clock3 size={14} />
+              7:04 PM <small>Simulated service time</small>
+            </div>
+            <div>
+              <ChefHat size={15} />
+              <b>{k.capacity}</b> active prep{" "}
+              {k.capacity === 1 ? "station" : "stations"}
+            </div>
+            <button onClick={() => setModal("settings")}>
+              Kitchen settings <ArrowUpRight size={13} />
+            </button>
+          </div>
+          {storageError && (
+            <div className="error" role="alert">
+              {storageError}
+            </div>
+          )}
+          <div className={`disruption ${k.delay ? "triggered" : ""}`}>
+            <div className="disruption-icon">
+              <Flame size={22} />
+            </div>
+            <div>
+              <span className="eyebrow">
+                {k.delay
+                  ? "DISRUPTION DETECTED"
+                  : "YOUR SERVICE, UNDER PRESSURE"}
+              </span>
+              <h2>
+                {k.delay
+                  ? "One delay. A ripple through the queue."
+                  : "What happens when prep takes eight minutes longer?"}
+              </h2>
+              <p>
+                {k.delay
+                  ? "Order #1042 needs 8 extra minutes. The revised plan accounts for remaining work and courier pickup commitments."
+                  : "Three orders. One prep station. Introduce a delay to see the difference a better sequence makes."}
+              </p>
+            </div>
+            <button
+              className={k.delay ? "secondary" : "primary"}
+              onClick={k.delay ? () => setTab("Scenario lab") : introduce}
+            >
+              {k.delay ? "Explore the impact" : "Introduce 8-minute delay"}
+              {k.delay ? <ArrowRight size={14} /> : <Zap size={14} />}
+            </button>
+          </div>
+          <div className="stats">
+            <div>
+              <span>
+                Orders in this service <ChefHat size={15} />
+              </span>
+              <strong>
+                03 <small>orders</small>
+              </strong>
+              <p>1 preparing · 2 in the queue</p>
+            </div>
+            <div>
+              <span>
+                Courier waiting <Truck size={15} />
+              </span>
+              <strong>
+                {applied ? after.wait : before.wait}
+                <small>total minutes</small>
+              </strong>
+              <p>
+                {k.delay && saved > 0 ? (
+                  <em>{saved} min recoverable with Praxis</em>
+                ) : (
+                  "Projected across all three orders"
+                )}
+              </p>
+            </div>
+            <div>
+              <span>
+                Pickup lateness <Clock3 size={15} />
+              </span>
+              <strong>
+                {applied ? after.lateness : before.lateness}
+                <small>total minutes</small>
+              </strong>
+              <p>
+                {applied ? after.late : before.late} orders past pickup deadline
+              </p>
+            </div>
+            <div>
+              <span>
+                Kitchen coordination <Activity size={15} />
+              </span>
+              <strong className="status-value">
+                {applied
+                  ? "Optimized"
+                  : k.delay
+                    ? "Needs attention"
+                    : "Preview mode"}
+              </strong>
+              <p>
+                <i
+                  className={k.delay && !applied ? "amber-dot" : "green-dot"}
+                />
+                {applied
+                  ? "Revised queue approved"
+                  : k.delay
+                    ? "A better sequence is available"
+                    : "Ready to test a disruption"}
+              </p>
+            </div>
+          </div>
+          {tab !== "Order queue" && (
+            <>
+              <section className="comparison-section">
+                <div className="section-heading">
+                  <div>
+                    <h2>Same kitchen. Same delay. A different outcome.</h2>
+                    <p>
+                      Compare the original queue with a plan that looks ahead.
+                    </p>
+                  </div>
+                  <div className="segments">
+                    {(["compare", "baseline", "praxis"] as const).map((m) => (
+                      <button
+                        key={m}
+                        className={mode === m ? "chosen" : ""}
+                        onClick={() => setMode(m)}
+                      >
+                        {m === "compare"
+                          ? "Compare"
+                          : m === "baseline"
+                            ? "Without Praxis"
+                            : "With Praxis"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div
+                  className={`comparison-grid ${mode !== "compare" ? "single" : ""}`}
+                >
+                  {mode !== "praxis" && (
+                    <section className="panel baseline-panel">
+                      <div className="panel-top">
+                        <div className="path-icon">
+                          <Clock3 size={19} />
+                        </div>
+                        <div>
+                          <div className="eyebrow">THE SAD PATH</div>
+                          <h3>Without Praxis</h3>
+                        </div>
+                        <span className="tag neutral">
+                          First come, first served
+                        </span>
+                      </div>
+                      <div className="path-subtitle">
+                        The queue keeps moving. The pickup plan falls behind.
+                      </div>
+                      <Timeline k={k} slots={sad} kind="baseline" />
+                      <div className="path-metrics">
+                        <div>
+                          <b>
+                            {before.wait}
+                            <small>min</small>
+                          </b>
+                          <span>Courier waiting</span>
+                        </div>
+                        <div>
+                          <b>
+                            {before.lateness}
+                            <small>min</small>
+                          </b>
+                          <span>Pickup lateness</span>
+                        </div>
+                        <div>
+                          <b>
+                            {before.idle}
+                            <small>min</small>
+                          </b>
+                          <span>Food sitting idle</span>
+                        </div>
+                      </div>
+                      <div className="path-insight">
+                        <Clock3 size={15} />
+                        <p>
+                          {k.delay
+                            ? "Longer order #1043 stays ahead of the urgent, four-minute #1044. Couriers wait while the queue follows arrival order."
+                            : "Orders follow arrival order, even when a shorter job has an earlier courier pickup."}
+                        </p>
+                      </div>
+                    </section>
+                  )}
+                  {mode !== "baseline" && (
+                    <section className="panel happy-panel">
+                      <div className="panel-top">
+                        <div className="path-icon">
+                          <Sparkles size={19} />
+                        </div>
+                        <div>
+                          <div className="eyebrow">THE HAPPY PATH</div>
+                          <h3>With Praxis</h3>
+                        </div>
+                        <span className="tag green">
+                          Constraint-aware planning
+                        </span>
+                      </div>
+                      <div className="path-subtitle">
+                        The same work, sequenced around the next pickup.
+                      </div>
+                      <Timeline k={k} slots={happy.slots} kind="praxis" />
+                      <div className="path-metrics">
+                        <div>
+                          <b>
+                            {after.wait}
+                            <small>min</small>
+                          </b>
+                          <span>Courier waiting</span>
+                        </div>
+                        <div>
+                          <b>
+                            {after.lateness}
+                            <small>min</small>
+                          </b>
+                          <span>Pickup lateness</span>
+                        </div>
+                        <div>
+                          <b>
+                            {after.idle}
+                            <small>min</small>
+                          </b>
+                          <span>Food sitting idle</span>
+                        </div>
+                      </div>
+                      <div className="path-insight">
+                        <ShieldCheck size={15} />
+                        <p>
+                          Keep active preparation in place. Sequence pending
+                          orders against courier ETAs and pickup deadlines,
+                          within {k.capacity} available{" "}
+                          {k.capacity === 1 ? "station" : "stations"}.
+                        </p>
+                      </div>
+                    </section>
+                  )}
+                </div>
+              </section>
+              <section className="recommendation">
+                <div className="recommendation-title">
+                  <div className="sparkle-square">
+                    <Sparkles size={20} />
+                  </div>
+                  <div>
+                    <div className="eyebrow">YOUR NEXT BEST MOVE</div>
+                    <h2>
+                      {applied
+                        ? "A clearer plan. Ready for the team."
+                        : `Prepare #${pending[0]?.id.slice(3)} before #${pending[1]?.id.slice(3)}.`}
+                    </h2>
+                  </div>
+                  <span className="tag green">
+                    {happy.examined} feasible sequences evaluated
+                  </span>
+                </div>
+                <p>{explain}</p>
+                <div className="recommendation-bottom">
+                  <div>
+                    <ShieldCheck size={14} />
+                    Active work stays put. You approve every queue change.
+                  </div>
+                  <button
+                    className="primary"
+                    disabled={applied}
+                    onClick={() => setModal("approve")}
+                  >
+                    {applied ? (
+                      <>
+                        <Check size={15} />
+                        Plan approved
+                      </>
+                    ) : (
+                      <>
+                        Review & apply plan <ArrowRight size={15} />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </section>
+            </>
+          )}
+          {(tab === "Order queue" || tab === "Service overview") && (
+            <section className="panel orders-panel">
+              <div className="section-heading">
+                <div>
+                  <h2>
+                    Your kitchen queue <span className="count">3</span>
+                  </h2>
+                  <p>
+                    {applied
+                      ? "Approved preparation sequence"
+                      : "Current first-come-first-served queue"}{" "}
+                    · all times are projected
+                  </p>
+                </div>
+                <span className="tag neutral">Sample DoorDash orders</span>
+              </div>
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>ORDER</th>
+                      <th>PREPARATION</th>
+                      <th>COURIER ETA</th>
+                      <th>PROJECTED READY</th>
+                      <th>PICKUP STATUS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {live.map((slot, i) => {
+                      const o = k.orders.find((o) => o.id === slot.id)!;
+                      return (
+                        <tr key={o.id}>
+                          <td>
+                            <div className="order-cell">
+                              <span
+                                className={
+                                  o.started !== undefined
+                                    ? "order-number active-order"
+                                    : "order-number"
+                                }
+                              >
+                                {o.started !== undefined ? (
+                                  <Flame size={15} />
+                                ) : (
+                                  i + 1
+                                )}
+                              </span>
+                              <div>
+                                <b>
+                                  #{o.id.slice(3)} <small>{o.customer}</small>
+                                </b>
+                                <p>{o.items}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <b>{slot.remaining} min remaining</b>
+                            <small>
+                              {o.started !== undefined
+                                ? "In progress · do not interrupt"
+                                : `Station ${slot.lane + 1} · starts ${time(slot.start)}`}
+                            </small>
+                          </td>
+                          <td>
+                            <span className="cell-icon">
+                              <Truck size={14} />
+                              {time(o.arrival)}
+                            </span>
+                            <small>Deadline {time(o.deadline)}</small>
+                          </td>
+                          <td>
+                            <b>{time(slot.end)}</b>
+                            <small>
+                              {slot.driverWait
+                                ? `${slot.driverWait} min courier wait`
+                                : `${slot.foodIdle} min food idle`}
+                            </small>
+                          </td>
+                          <td>
+                            <span
+                              className={`tag ${slot.late ? "orange" : "green"}`}
+                            >
+                              {slot.late
+                                ? `${slot.late} min late`
+                                : "Within pickup window"}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+          {tab === "Scenario lab" && (
+            <section className="panel lab-panel">
+              <div className="section-heading">
+                <div>
+                  <h2>Reproducible by design.</h2>
+                  <p>
+                    Both paths use exactly the same order data, capacity, clock,
+                    and delay.
+                  </p>
+                </div>
+                <button className="secondary" onClick={reset}>
+                  <RotateCcw size={14} />
+                  Restore initial conditions
+                </button>
+              </div>
+              <div className="lab-data">
+                <div>
+                  <span>01 / INITIAL STATE</span>
+                  <h3>7:04 PM. Dinner is moving.</h3>
+                  <p>
+                    #1042 has completed 4 of 10 prep minutes. #1043 needs 12
+                    minutes, and #1044 needs 4. One station handles one order at
+                    a time.
+                  </p>
+                </div>
+                <div>
+                  <span>02 / THE DISRUPTION</span>
+                  <h3>Eight minutes behind.</h3>
+                  <p>
+                    The active order needs eight additional minutes. Already
+                    completed work is preserved. Both paths receive the same
+                    event, once.
+                  </p>
+                  <button
+                    disabled={k.delay === 8}
+                    className="secondary"
+                    onClick={introduce}
+                  >
+                    <Zap size={14} />
+                    {k.delay
+                      ? "Delay already active"
+                      : "Inject identical delay"}
+                  </button>
+                </div>
+                <div>
+                  <span>03 / THE DECISION</span>
+                  <h3>Find the best feasible sequence.</h3>
+                  <p>
+                    Exact search evaluates every pending order permutation. The
+                    objective is 5 × pickup lateness + 2 × courier waiting +
+                    food idle minutes.
+                  </p>
+                </div>
+              </div>
+            </section>
+          )}
+          <div className="bottom-note">
+            <span>✳</span>
+            <div>
+              <h3>Built for the rush. Guided by the real constraints.</h3>
+              <p>
+                Praxis recommends. Your team decides. No live DoorDash
+                connection is required for this demo.
+              </p>
+            </div>
+            <button onClick={() => setModal("about")}>
+              How it works <ArrowUpRight size={14} />
+            </button>
+          </div>
+          <footer>
+            <span>
+              <i className="green-dot" />
+              Local demo · deterministic scheduling engine
+            </span>
+            <span>Sample data, real calculations.</span>
+          </footer>
+        </main>
+      </div>
+      {toast && (
+        <div className="toast" role="status">
+          <CheckCircle2 size={17} />
+          {toast}
+        </div>
+      )}
+      {modal && (
+        <div className="overlay" onClick={() => setModal("")}>
+          <section
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={modal}
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="close"
+              aria-label="Close dialog"
+              onClick={() => setModal("")}
+            >
+              <X size={19} />
+            </button>
+            <div className="eyebrow">
+              <Sparkles size={15} />
+              PRAXIS / KITCHEN COORDINATION
+            </div>
+            {modal === "approve" ? (
+              <>
+                <h2>
+                  A new sequence.
+                  <br />
+                  The same kitchen commitments.
+                </h2>
+                <p>{explain}</p>
+                <ol className="approval-list">
+                  {happy.slots.map((s) => (
+                    <li key={s.id}>
+                      <b>#{s.id.slice(3)}</b>
+                      <span>
+                        {time(s.start)} → {time(s.end)} · Station {s.lane + 1}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+                <p className="fine-print">
+                  Applying updates this demo’s queue only. It does not notify
+                  couriers, change DoorDash estimates, or send instructions to
+                  staff.
+                </p>
+                <button className="primary full" onClick={approve}>
+                  <Check size={15} />
+                  Approve preparation plan
+                </button>
+              </>
+            ) : modal === "assistant" ? (
+              <>
+                <h2>What’s the next best move?</h2>
+                <div className="assistant-answer" aria-live="polite">
+                  {answer}
+                </div>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    ask();
+                  }}
+                >
+                  <label>
+                    Ask about this service
+                    <input
+                      required
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="Why prepare #1044 first?"
+                      maxLength={1000}
+                    />
+                  </label>
+                  <button className="primary" disabled={busy}>
+                    {busy ? "Thinking…" : "Explain the plan"}
+                    <ArrowRight size={14} />
+                  </button>
+                </form>
+                <p className="fine-print">
+                  Local explanations always work. OpenRouter is optional and can
+                  only explain computed facts; it cannot apply a plan.
+                </p>
+              </>
+            ) : modal === "settings" ? (
+              <>
+                <h2>Capacity changes the possibilities.</h2>
+                <p>
+                  One station prepares one order at a time. Change capacity to
+                  rerun both paths under the same conditions.
+                </p>
+                <label>
+                  Active preparation stations
+                  <select
+                    value={k.capacity}
+                    onChange={(e) => {
+                      setK({ ...k, capacity: Number(e.target.value) });
+                      setApplied(false);
+                    }}
+                  >
+                    {[1, 2, 3].map((n) => (
+                      <option value={n} key={n}>
+                        {n} {n === 1 ? "station" : "stations"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button className="primary full" onClick={() => setModal("")}>
+                  Done
+                  <Check size={14} />
+                </button>
+              </>
+            ) : (
+              <>
+                <h2>
+                  A decision layer.
+                  <br />A calmer dinner service.
+                </h2>
+                <p>
+                  Praxis is an independent prototype for DoorDash merchants. It
+                  uses sample orders, simulated courier arrival times, and
+                  limited preparation capacity to find the best pending
+                  sequence.
+                </p>
+                <p>
+                  Started work cannot be interrupted. Exact search scores
+                  lateness most heavily, then courier waiting, then food sitting
+                  idle. It optimizes the modeled sequences, not every possible
+                  real-world kitchen decision.
+                </p>
+                <p>
+                  Orders and approvals are saved in this browser. There is no
+                  live DoorDash integration, staff messaging, or cross-device
+                  synchronization.
+                </p>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
